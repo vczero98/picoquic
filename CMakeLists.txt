@@ -126,6 +126,8 @@ add_library(picoqinq-core
 add_executable(picoquicdemo
     picoquicfirst/picoquicdemo.c
     picoquicfirst/getopt.c
+    picoquicfirst/config_reader.c
+    picoquicfirst/signalstatecounter.c
 )
 
 target_link_libraries(picoquicdemo

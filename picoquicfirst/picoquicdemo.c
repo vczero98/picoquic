@@ -56,6 +56,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
+#include <sys/signal.h>
 
 #ifndef __USE_XOPEN2K
 #define __USE_XOPEN2K
@@ -100,6 +101,18 @@ static const char* token_store_filename = "demo_token_store.bin";
 #include "democlient.h"
 #include "demoserver.h"
 #include "siduck.h"
+#include "config_reader.h"
+#include "signalstatecounter.h"
+
+int printStateSignalFlag = 0;
+
+// Function to process receiving user signal
+static void sig_usr(int signo) {
+    if (signo == SIGUSR1) {
+        printStateSignalFlag = 1;
+        printf("Received signal 1\n");
+    } else fprintf(stderr, "Received signal %d\n", signo);
+}
 
 /*
  * SIDUCK datagram demo call back.
@@ -169,7 +182,8 @@ int quic_server(const char* server_name, int server_port,
     int dest_if, int mtu_max, uint32_t proposed_version, 
     const char * esni_key_file_name, const char * esni_rr_file_name,
     FILE * F_log, char const* bin_file, char const * cc_log_dir, int use_long_log, 
-    picoquic_congestion_algorithm_t const * cc_algorithm, char const * web_folder)
+    picoquic_congestion_algorithm_t const * cc_algorithm, char const * web_folder,
+    struct SignalStateCounter *stateCounter)
 {
     /* Start: start the QUIC process with cert and key files */
     int ret = 0;
@@ -274,12 +288,18 @@ int quic_server(const char* server_name, int server_port,
         }
 
         if (bytes_recv < 0) {
-            ret = -1;
+            if (printStateSignalFlag) {
+                printStateSignalFlag = 0;
+                outputSignalStateCounter(stateCounter, 1);
+            } else {
+                ret = -1;
+            }
         } else {
             uint64_t loop_time;
 
             if (bytes_recv > 0) {
                 /* Submit the packet to the server */
+                stateCounter->state1++;
                 (void)picoquic_incoming_packet(qserver, buffer,
                     (size_t)bytes_recv, (struct sockaddr*)&addr_from,
                     (struct sockaddr*)&addr_to, if_index_to, received_ecn,
@@ -340,6 +360,7 @@ int quic_server(const char* server_name, int server_port,
 }
 
 static const char * test_scenario_default = "0:index.html;4:test.html;8:/1234567;12:main.jpg;16:war-and-peace.txt;20:en/latest/;24:/file-123K";
+// static const char * test_scenario_default = "0:hello.html";
 
 #define PICOQUIC_DEMO_CLIENT_MAX_RECEIVE_BATCH 4
 
@@ -487,7 +508,10 @@ int quic_client(const char* ip_address_text, int server_port,
     int is_siduck = 0;
     siduck_ctx_t* siduck_ctx = NULL;
     char const* saved_alpn = NULL;
+    char *config = NULL;
 
+    read_config(&config);
+    
     if (alpn != NULL && strcmp(alpn, "siduck") == 0) {
         /* Set a siduck client */
         is_siduck = 1;
@@ -505,7 +529,11 @@ int quic_client(const char* ip_address_text, int server_port,
         }
 
         if (client_scenario_text == NULL) {
-            client_scenario_text = test_scenario_default;
+            if (config == NULL) {
+                client_scenario_text = test_scenario_default;
+            } else {
+                client_scenario_text = config;
+            }
         }
 
         fprintf(stdout, "Testing scenario: <%s>\n", client_scenario_text);
@@ -922,6 +950,7 @@ int quic_client(const char* ip_address_text, int server_port,
     }
 
     /* Clean up */
+    free_config(&config); // Free the loaded config file
     if (is_siduck) {
         free(siduck_ctx);
     } else {
@@ -1295,6 +1324,14 @@ int main(int argc, char** argv)
         }
 
         /* Run as server */
+        // Add listener for signal
+        if (signal(SIGUSR1, sig_usr) == SIG_ERR)
+            fprintf(stderr, "Can't catch SIGUSR1\n");
+
+        // Initialise state counter
+        struct SignalStateCounter *stateCounter = NULL;
+        initSignalStateCounter(&stateCounter);
+
         printf("Starting Picoquic server (v%s) on port %d, server name = %s, just_once = %d, hrr= %d\n",
             PICOQUIC_VERSION, server_port, server_name, just_once, do_hrr);
         ret = quic_server(server_name, server_port,
@@ -1303,7 +1340,8 @@ int main(int argc, char** argv)
             (cnx_id_cbdata == NULL) ? NULL : (void*)cnx_id_cbdata,
             (uint8_t*)reset_seed, dest_if, mtu_max, proposed_version,
             esni_key_file, esni_rr_file,
-            F_log, bin_file, cc_log_dir, use_long_log, cc_algorithm, www_dir);
+            F_log, bin_file, cc_log_dir, use_long_log, cc_algorithm, www_dir, stateCounter);
+        freeSignalStateCounter(stateCounter);
         printf("Server exit with code = %d\n", ret);
     } else {
         /* Run as client */

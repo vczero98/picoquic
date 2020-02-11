@@ -20,3 +20,11 @@ Release
 */*.xbf
 */*.ilk
 *.b
+*.o
+*.cmake
+*.bin
+*.make
+*.internal
+*.includecache
+*.log
+*.a
